@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#1a3e4f">
+<link rel="manifest" href="manifest.json">
+<title>Scan-Probe W97.1</title>
+<!-- Messmittel W97.1 (Scan-Beweis, O-W97.0-4). Kein Code der App, keine Daten des Hauses.
+     Bibliothek: zxing-library 0.21.3 (Apache 2.0) aus odoo/odoo 19.0 addons/web/static/lib/zxing-library/,
+     gleiche Logik wie barcode_video_scanner.js / ZXingBarcodeDetector.js (Formate, TRY_HARDER, Zielrahmen). -->
+<style>
+:root{--petrol:#1a3e4f;--gruen:#166534;--rot:#991b1b;--text:#111827;--leise:#374151;--flaeche:#efeeee}
+*{box-sizing:border-box}
+body{margin:0;font:18px/1.4 -apple-system,system-ui,Roboto,sans-serif;background:var(--flaeche);color:var(--text)}
+header{background:var(--petrol);color:#fff;padding:calc(env(safe-area-inset-top) + 12px) 16px 12px;font-weight:700;font-size:20px}
+main{padding:12px 16px 120px}
+.sucher{position:relative;width:100%;aspect-ratio:3/4;background:#1c1917;border-radius:16px;overflow:hidden;display:none}
+.sucher video{width:100%;height:100%;object-fit:cover}
+.rahmen{position:absolute;left:7.5%;top:32.5%;width:85%;height:35%;border:4px solid #fff;border-radius:12px;box-shadow:0 0 0 9999px rgba(0,0,0,.35)}
+button{font:inherit;font-weight:700;border:0;border-radius:16px;min-height:72px;width:100%;margin-top:12px;color:#fff;background:var(--gruen)}
+button.zweit{background:#fff;color:var(--petrol);border:2px solid var(--petrol);min-height:56px}
+.treffer{background:#fff;border:2px solid #c9c6c4;border-left:8px solid var(--gruen);border-radius:14px;padding:10px 12px;margin-top:12px}
+.treffer b{font-size:22px;word-break:break-all}
+.info{font-size:15px;color:var(--leise);margin-top:12px;white-space:pre-wrap}
+.fehler{border-left-color:var(--rot)}
+#fuss{position:fixed;left:0;right:0;bottom:0;padding:12px 16px calc(env(safe-area-inset-bottom) + 12px);background:var(--flaeche);border-top:1px solid #c9c6c4}
+#fuss button{margin-top:0}
+</style>
+</head>
+<body>
+<header>Scan-Probe · BEISPIEL</header>
+<main>
+  <div class="sucher" id="sucher"><video id="video" playsinline muted></video><div class="rahmen"></div></div>
+  <div id="liste"></div>
+  <button class="zweit" id="seite">Test: Kamera und Seitenwechsel</button>
+  <button class="zweit" id="kopieren">Ergebnis kopieren</button>
+  <div class="info" id="info"></div>
+</main>
+<div id="fuss"><button id="start">Scannen</button></div>
+<script>
+"use strict";
+const $=id=>document.getElementById(id);
+const Q=new URLSearchParams(location.search);
+const LOG={probe:"W97.1 Scan-Probe 1",ua:navigator.userAgent,standalone:matchMedia("(display-mode: standalone)").matches||navigator.standalone===true,
+  detectorImBrowser:"BarcodeDetector" in window,online:navigator.onLine,versuche:[]};
+let detector=null, stream=null, laeuft=false, t0=0, tFrame=0, bilder=0, decodeMs=0;
+const FORMATE=["ean_13","code_128","qr_code"];
+function info(){ $("info").textContent=JSON.stringify(LOG,null,1); }
+async function ladeDetector(){
+  if(detector) return;
+  const erzwingeZxing=Q.get("zxing")==="1";
+  if("BarcodeDetector" in window && !erzwingeZxing){
+    detector=new BarcodeDetector({formats:FORMATE}); LOG.weg="BarcodeDetector"; return;
+  }
+  const a=performance.now();
+  await new Promise((ok,nein)=>{const s=document.createElement("script");s.src="zxing-library.js";s.onload=ok;s.onerror=()=>nein(new Error("Bibliothek nicht geladen"));document.head.appendChild(s);});
+  LOG.bibliothekMs=Math.round(performance.now()-a); LOG.weg="zxing-library";
+  const Z=window.ZXing, map={ean_13:Z.BarcodeFormat.EAN_13,code_128:Z.BarcodeFormat.CODE_128,qr_code:Z.BarcodeFormat.QR_CODE};
+  const reader=new Z.MultiFormatReader();
+  reader.setHints(new Map([[Z.DecodeHintType.POSSIBLE_FORMATS,FORMATE.map(f=>map[f])],[Z.DecodeHintType.TRY_HARDER,true]]));
+  const canvas=document.createElement("canvas"), ctx=canvas.getContext("2d",{willReadFrequently:true});
+  detector={detect:async v=>{
+    // Zielrahmen wie crop_overlay: 85 % Breite, 35 % Hoehe, Mitte des sichtbaren Bildes
+    const w=v.videoWidth,h=v.videoHeight, cw=Math.round(w*0.85), ch=Math.round(h*0.35);
+    canvas.width=cw; canvas.height=ch; ctx.drawImage(v,Math.round((w-cw)/2),Math.round((h-ch)/2),cw,ch,0,0,cw,ch);
+    try{ const r=reader.decodeWithState(new Z.BinaryBitmap(new Z.HybridBinarizer(new Z.HTMLCanvasElementLuminanceSource(canvas))));
+      const f=Object.keys(map).find(k=>map[k]===r.getBarcodeFormat()); return [{rawValue:r.getText(),format:f}];
+    }catch(e){ return []; }
+  }};
+}
+async function start(){
+  const v=$("video"); t0=performance.now(); bilder=0; decodeMs=0;
+  try{
+    await ladeDetector();
+    const a=performance.now();
+    stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:"environment"}});
+    v.srcObject=stream; await v.play(); $("sucher").style.display="block";
+    LOG.kameraMs=Math.round(performance.now()-a);
+    const s=stream.getVideoTracks()[0].getSettings(); LOG.kamera={breite:s.width,hoehe:s.height,zoom:s.zoom??null,
+      zoomMoeglich:!!(stream.getVideoTracks()[0].getCapabilities?.().zoom),lichtMoeglich:!!(stream.getVideoTracks()[0].getCapabilities?.().torch)};
+    tFrame=performance.now(); laeuft=true; $("start").textContent="Abbrechen"; schleife();
+  }catch(e){ LOG.versuche.push({fehler:e.name+": "+e.message,ms:Math.round(performance.now()-t0)}); zeige({fehler:e.name}); info(); }
+}
+function stopp(){ laeuft=false; if(stream) stream.getTracks().forEach(t=>t.stop()); stream=null; $("sucher").style.display="none"; $("start").textContent="Scannen"; }
+async function schleife(){
+  if(!laeuft) return;
+  const v=$("video");
+  if(v.readyState>=2){
+    const a=performance.now(); const codes=await detector.detect(v); decodeMs+=performance.now()-a; bilder++;
+    if(codes.length){
+      const r={wert:codes[0].rawValue,format:codes[0].format,bisTrefferMs:Math.round(performance.now()-tFrame),
+        abTippMs:Math.round(performance.now()-t0),bilder,decodeMsJeBild:Math.round(decodeMs/bilder),zeit:new Date().toLocaleTimeString("de-CH")};
+      LOG.versuche.push(r); if(navigator.vibrate) navigator.vibrate(60); stopp(); zeige(r); info(); return;
+    }
+  }
+  setTimeout(schleife,100);
+}
+function zeige(r){
+  const d=document.createElement("div"); d.className="treffer"+(r.fehler?" fehler":"");
+  d.innerHTML=r.fehler?`Kamera: <b>${r.fehler}</b>`:`<b>${r.wert}</b><br>${r.format} · ${(r.bisTrefferMs/1000).toFixed(1)} s bis Treffer · ${r.bilder} Bilder`;
+  $("liste").prepend(d);
+}
+$("seite").onclick=async()=>{ // WebKit 212040: haelt der Kamera-Strom einen Seitenwechsel (history.pushState) in der Startbildschirm-App aus?
+  try{ const st=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:"environment"}}); const tr=st.getVideoTracks()[0];
+    await new Promise(r=>setTimeout(r,800)); history.pushState({probe:1},"","#seite2"); await new Promise(r=>setTimeout(r,1200));
+    LOG.seitenwechsel={strom:tr.readyState,stumm:tr.muted}; st.getTracks().forEach(t=>t.stop()); history.back();
+  }catch(e){ LOG.seitenwechsel={fehler:e.name}; } zeige(LOG.seitenwechsel.fehler?{fehler:LOG.seitenwechsel.fehler}:{wert:"Seitenwechsel: "+LOG.seitenwechsel.strom,format:"Test",bisTrefferMs:0,bilder:0}); info(); };
+$("start").onclick=()=>laeuft?stopp():start();
+$("kopieren").onclick=async()=>{ try{await navigator.clipboard.writeText(JSON.stringify(LOG));}catch(e){} info(); };
+if("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").then(()=>{LOG.serviceWorker=true;info();},e=>{LOG.serviceWorker=String(e);info();});
+window.__probe=LOG; info();
+</script>
+</body>
+</html>
