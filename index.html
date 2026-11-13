@@ -35,7 +35,7 @@ button.zweit{background:#fff;color:var(--petrol);border:2px solid var(--petrol);
 <header>Scan-Probe · BEISPIEL</header>
 <main>
   <div class="sucher" id="sucher"><video id="video" playsinline muted></video><div class="rahmen"></div><div class="satz">Code waagrecht in den Rahmen</div></div>
-  <div class="wahl"><button class="zweit an" data-zoom="1">Zoom 1×</button><button class="zweit" data-zoom="1.5">1,5×</button><button class="zweit" data-zoom="2">2×</button><button class="zweit" id="licht">Licht</button></div>
+  <div class="wahl"><button class="zweit" data-zoom="1">Zoom 1×</button><button class="zweit" data-zoom="1.5">1,5×</button><button class="zweit an" data-zoom="2">2×</button><button class="zweit" id="licht">Licht</button></div>
   <div id="liste"></div>
   <button class="zweit" id="seite">Test: Kamera und Seitenwechsel</button>
   <button class="zweit" id="kopieren">Ergebnis kopieren</button>
@@ -44,9 +44,10 @@ button.zweit{background:#fff;color:var(--petrol);border:2px solid var(--petrol);
 <div id="fuss"><button id="start">Scannen</button></div>
 <script>
 "use strict";
+let LETZT=null,ERST=0;
 const $=id=>document.getElementById(id);
 const Q=new URLSearchParams(location.search);
-const LOG={probe:"W97.1 Scan-Probe 2",ua:navigator.userAgent,standalone:matchMedia("(display-mode: standalone)").matches||navigator.standalone===true,
+const LOG={probe:"W97.1 Scan-Probe 3",ua:navigator.userAgent,standalone:matchMedia("(display-mode: standalone)").matches||navigator.standalone===true,
   detectorImBrowser:"BarcodeDetector" in window,online:navigator.onLine,versuche:[]};
 let detector=null, stream=null, laeuft=false, t0=0, tFrame=0, bilder=0, decodeMs=0;
 const FORMATE=["ean_13","code_128","qr_code"];
@@ -87,7 +88,7 @@ async function start(){
     LOG.kameraMs=Math.round(performance.now()-a);
     const s=stream.getVideoTracks()[0].getSettings(); LOG.kamera={breite:s.width,hoehe:s.height,zoom:s.zoom??null,
       zoomMoeglich:!!(stream.getVideoTracks()[0].getCapabilities?.().zoom),lichtMoeglich:!!(stream.getVideoTracks()[0].getCapabilities?.().torch)};
-    tFrame=performance.now(); laeuft=true; $("start").textContent="Abbrechen"; schleife();
+    tFrame=performance.now(); LETZT=null; ERST=0; laeuft=true; $("start").textContent="Abbrechen"; schleife();
   }catch(e){ LOG.versuche.push({fehler:e.name+": "+e.message,ms:Math.round(performance.now()-t0)}); zeige({fehler:e.name}); info(); }
 }
 function stopp(){ laeuft=false; if(stream) stream.getTracks().forEach(t=>t.stop()); stream=null; $("sucher").style.display="none"; $("start").textContent="Scannen"; }
@@ -96,13 +97,14 @@ async function schleife(){
   const v=$("video");
   if(v.readyState>=2){
     const a=performance.now(); const codes=await detector.detect(v); decodeMs+=performance.now()-a; bilder++;
-    if(codes.length){
-      const r={wert:codes[0].rawValue,format:codes[0].format,bisTrefferMs:Math.round(performance.now()-tFrame),
+    if(codes.length&&codes[0].rawValue!==LETZT){LETZT=codes[0].rawValue;ERST++;} /* Probe 3: erst der zweite gleiche Treffer zaehlt (Fehllesung 7004748109400) */
+    else if(codes.length){
+      const r={wert:codes[0].rawValue,format:codes[0].format,bisTrefferMs:Math.round(performance.now()-tFrame),andereErstlesungen:ERST-1,
         abTippMs:Math.round(performance.now()-t0),bilder,decodeMsJeBild:Math.round(decodeMs/bilder),zeit:new Date().toLocaleTimeString("de-CH"),aufloesung:v.videoWidth+"x"+v.videoHeight,zoom:ZOOM,licht:LICHT};
       LOG.versuche.push(r); if(navigator.vibrate) navigator.vibrate(60); stopp(); zeige(r); info(); return;
     }
   }
-  setTimeout(schleife,100);
+  setTimeout(schleife,0); /* Probe 3: ohne Pause zwischen den Bildern (Probe 1-2: 100 ms) */
 }
 function zeige(r){
   const d=document.createElement("div"); d.className="treffer"+(r.fehler?" fehler":"");
@@ -115,7 +117,7 @@ $("seite").onclick=async()=>{ // WebKit 212040: haelt der Kamera-Strom einen Sei
     LOG.seitenwechsel={strom:tr.readyState,stumm:tr.muted}; st.getTracks().forEach(t=>t.stop()); history.back();
   }catch(e){ LOG.seitenwechsel={fehler:e.name}; } zeige(LOG.seitenwechsel.fehler?{fehler:LOG.seitenwechsel.fehler}:{wert:"Seitenwechsel: "+LOG.seitenwechsel.strom,format:"Test",bisTrefferMs:0,bilder:0}); info(); };
 $("start").onclick=()=>laeuft?stopp():start();
-let ZOOM=1,LICHT=false;
+let ZOOM=2,LICHT=false; /* Probe 3: 2x als Start (Messung 2: Median 2,9 s mit 2x gegen 4,8 s mit 1x) */
 document.querySelectorAll("[data-zoom]").forEach(b=>b.onclick=()=>{ZOOM=+b.dataset.zoom;document.querySelectorAll("[data-zoom]").forEach(x=>x.classList.toggle("an",x===b));if(stream){const t=stream.getVideoTracks()[0];t.applyConstraints({advanced:[{zoom:ZOOM}]}).catch(()=>{});}});
 $("licht").onclick=()=>{LICHT=!LICHT;$("licht").classList.toggle("an",LICHT);if(stream){stream.getVideoTracks()[0].applyConstraints({advanced:[{torch:LICHT}]}).catch(()=>{});}};
 $("kopieren").onclick=async()=>{ try{await navigator.clipboard.writeText(JSON.stringify(LOG));}catch(e){} info(); };
