@@ -27,12 +27,15 @@ button.zweit{background:#fff;color:var(--petrol);border:2px solid var(--petrol);
 .fehler{border-left-color:var(--rot)}
 #fuss{position:fixed;left:0;right:0;bottom:0;padding:12px 16px calc(env(safe-area-inset-bottom) + 12px);background:var(--flaeche);border-top:1px solid #c9c6c4}
 #fuss button{margin-top:0}
+.wahl{display:flex;gap:8px}.wahl button{min-height:56px;margin-top:12px}.wahl button.an{background:var(--petrol);color:#fff}
+.satz{position:absolute;left:0;right:0;bottom:12%;text-align:center;color:#fff;font-weight:700;text-shadow:0 1px 3px #000}
 </style>
 </head>
 <body>
 <header>Scan-Probe · BEISPIEL</header>
 <main>
-  <div class="sucher" id="sucher"><video id="video" playsinline muted></video><div class="rahmen"></div></div>
+  <div class="sucher" id="sucher"><video id="video" playsinline muted></video><div class="rahmen"></div><div class="satz">Code waagrecht in den Rahmen</div></div>
+  <div class="wahl"><button class="zweit an" data-zoom="1">Zoom 1×</button><button class="zweit" data-zoom="1.5">1,5×</button><button class="zweit" data-zoom="2">2×</button><button class="zweit" id="licht">Licht</button></div>
   <div id="liste"></div>
   <button class="zweit" id="seite">Test: Kamera und Seitenwechsel</button>
   <button class="zweit" id="kopieren">Ergebnis kopieren</button>
@@ -43,7 +46,7 @@ button.zweit{background:#fff;color:var(--petrol);border:2px solid var(--petrol);
 "use strict";
 const $=id=>document.getElementById(id);
 const Q=new URLSearchParams(location.search);
-const LOG={probe:"W97.1 Scan-Probe 1",ua:navigator.userAgent,standalone:matchMedia("(display-mode: standalone)").matches||navigator.standalone===true,
+const LOG={probe:"W97.1 Scan-Probe 2",ua:navigator.userAgent,standalone:matchMedia("(display-mode: standalone)").matches||navigator.standalone===true,
   detectorImBrowser:"BarcodeDetector" in window,online:navigator.onLine,versuche:[]};
 let detector=null, stream=null, laeuft=false, t0=0, tFrame=0, bilder=0, decodeMs=0;
 const FORMATE=["ean_13","code_128","qr_code"];
@@ -75,7 +78,11 @@ async function start(){
   try{
     await ladeDetector();
     const a=performance.now();
-    stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:"environment"}});
+    stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:"environment",width:{ideal:1920},height:{ideal:1080}}}); /* Probe 2: Probe 1 lief mit 480 x 640 */
+    const tr0=stream.getVideoTracks()[0];
+    try{await tr0.applyConstraints({advanced:[{focusMode:"continuous"}]});LOG.fokus="continuous";}catch(e){LOG.fokus="nein";}
+    if(ZOOM>1){try{await tr0.applyConstraints({advanced:[{zoom:ZOOM}]});}catch(e){}}
+    if(LICHT){try{await tr0.applyConstraints({advanced:[{torch:true}]});}catch(e){}}
     v.srcObject=stream; await v.play(); $("sucher").style.display="block";
     LOG.kameraMs=Math.round(performance.now()-a);
     const s=stream.getVideoTracks()[0].getSettings(); LOG.kamera={breite:s.width,hoehe:s.height,zoom:s.zoom??null,
@@ -91,7 +98,7 @@ async function schleife(){
     const a=performance.now(); const codes=await detector.detect(v); decodeMs+=performance.now()-a; bilder++;
     if(codes.length){
       const r={wert:codes[0].rawValue,format:codes[0].format,bisTrefferMs:Math.round(performance.now()-tFrame),
-        abTippMs:Math.round(performance.now()-t0),bilder,decodeMsJeBild:Math.round(decodeMs/bilder),zeit:new Date().toLocaleTimeString("de-CH")};
+        abTippMs:Math.round(performance.now()-t0),bilder,decodeMsJeBild:Math.round(decodeMs/bilder),zeit:new Date().toLocaleTimeString("de-CH"),aufloesung:v.videoWidth+"x"+v.videoHeight,zoom:ZOOM,licht:LICHT};
       LOG.versuche.push(r); if(navigator.vibrate) navigator.vibrate(60); stopp(); zeige(r); info(); return;
     }
   }
@@ -108,6 +115,9 @@ $("seite").onclick=async()=>{ // WebKit 212040: haelt der Kamera-Strom einen Sei
     LOG.seitenwechsel={strom:tr.readyState,stumm:tr.muted}; st.getTracks().forEach(t=>t.stop()); history.back();
   }catch(e){ LOG.seitenwechsel={fehler:e.name}; } zeige(LOG.seitenwechsel.fehler?{fehler:LOG.seitenwechsel.fehler}:{wert:"Seitenwechsel: "+LOG.seitenwechsel.strom,format:"Test",bisTrefferMs:0,bilder:0}); info(); };
 $("start").onclick=()=>laeuft?stopp():start();
+let ZOOM=1,LICHT=false;
+document.querySelectorAll("[data-zoom]").forEach(b=>b.onclick=()=>{ZOOM=+b.dataset.zoom;document.querySelectorAll("[data-zoom]").forEach(x=>x.classList.toggle("an",x===b));if(stream){const t=stream.getVideoTracks()[0];t.applyConstraints({advanced:[{zoom:ZOOM}]}).catch(()=>{});}});
+$("licht").onclick=()=>{LICHT=!LICHT;$("licht").classList.toggle("an",LICHT);if(stream){stream.getVideoTracks()[0].applyConstraints({advanced:[{torch:LICHT}]}).catch(()=>{});}};
 $("kopieren").onclick=async()=>{ try{await navigator.clipboard.writeText(JSON.stringify(LOG));}catch(e){} info(); };
 if("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").then(()=>{LOG.serviceWorker=true;info();},e=>{LOG.serviceWorker=String(e);info();});
 window.__probe=LOG; info();
